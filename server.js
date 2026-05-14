@@ -6,7 +6,6 @@ import cors from "cors";
 const bare = createBareServer("/bare/");
 const app = express();
 
-// CORS - allow all origins
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
@@ -15,60 +14,38 @@ app.use(cors({
   credentials: true,
 }));
 
-// Strip headers that break CAPTCHA / iframe loading
+// Remove headers that block challenge pages / iframes from rendering
 app.use((req, res, next) => {
-  // Remove restrictive headers from responses so CAPTCHAs can load in iframes
-  const origSetHeader = res.setHeader.bind(res);
+  const orig = res.setHeader.bind(res);
   res.setHeader = (name, value) => {
-    const lower = name.toLowerCase();
-    // Block headers that prevent CAPTCHA iframes from rendering
-    if (lower === "x-frame-options") return;
-    if (lower === "content-security-policy") return;
-    if (lower === "cross-origin-embedder-policy") return;
-    if (lower === "cross-origin-opener-policy") return;
-    if (lower === "cross-origin-resource-policy") return;
-    origSetHeader(name, value);
+    const n = name.toLowerCase();
+    if (n === "x-frame-options")               return; // blocks iframes
+    if (n === "content-security-policy")       return; // blocks inline scripts
+    if (n === "cross-origin-embedder-policy")  return; // breaks challenge workers
+    if (n === "cross-origin-opener-policy")    return; // breaks popups
+    if (n === "cross-origin-resource-policy")  return; // blocks cross-origin loads
+    orig(name, value);
   };
   next();
 });
 
-// Health check
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "UV Bare Server",
-    version: "2.0",
-    endpoints: { bare: "/bare/" },
-    captcha: "passthrough enabled",
-  });
-});
+app.get("/", (_req, res) => res.json({
+  status: "ok", service: "UV Bare Server", version: "2.0",
+}));
 
-// Route bare protocol requests
 app.use((req, res, next) => {
-  if (bare.shouldRoute(req)) {
-    bare.routeRequest(req, res);
-  } else {
-    next();
-  }
+  if (bare.shouldRoute(req)) bare.routeRequest(req, res);
+  else next();
 });
 
-app.use((req, res) => {
-  res.status(404).json({ error: "Not found" });
-});
+app.use((_req, res) => res.status(404).json({ error: "Not found" }));
 
 const server = http.createServer(app);
-
 server.on("upgrade", (req, socket, head) => {
-  if (bare.shouldRoute(req)) {
-    bare.routeUpgrade(req, socket, head);
-  } else {
-    socket.destroy();
-  }
+  if (bare.shouldRoute(req)) bare.routeUpgrade(req, socket, head);
+  else socket.destroy();
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`✅ Bare server running on http://localhost:${PORT}`);
-});
-
+server.listen(PORT, () => console.log(`Bare server → http://localhost:${PORT}`));
 export default app;
