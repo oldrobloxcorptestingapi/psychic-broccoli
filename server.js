@@ -6,14 +6,31 @@ import cors from "cors";
 const bare = createBareServer("/bare/");
 const app = express();
 
-// Allow all origins for cross-origin proxy requests
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-    allowedHeaders: ["*"],
-  })
-);
+// CORS - allow all origins
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+  allowedHeaders: ["*"],
+  exposedHeaders: ["*"],
+  credentials: true,
+}));
+
+// Strip headers that break CAPTCHA / iframe loading
+app.use((req, res, next) => {
+  // Remove restrictive headers from responses so CAPTCHAs can load in iframes
+  const origSetHeader = res.setHeader.bind(res);
+  res.setHeader = (name, value) => {
+    const lower = name.toLowerCase();
+    // Block headers that prevent CAPTCHA iframes from rendering
+    if (lower === "x-frame-options") return;
+    if (lower === "content-security-policy") return;
+    if (lower === "cross-origin-embedder-policy") return;
+    if (lower === "cross-origin-opener-policy") return;
+    if (lower === "cross-origin-resource-policy") return;
+    origSetHeader(name, value);
+  };
+  next();
+});
 
 // Health check
 app.get("/", (req, res) => {
@@ -22,10 +39,11 @@ app.get("/", (req, res) => {
     service: "UV Bare Server",
     version: "2.0",
     endpoints: { bare: "/bare/" },
+    captcha: "passthrough enabled",
   });
 });
 
-// Route all requests through the bare server handler
+// Route bare protocol requests
 app.use((req, res, next) => {
   if (bare.shouldRoute(req)) {
     bare.routeRequest(req, res);
@@ -34,14 +52,12 @@ app.use((req, res, next) => {
   }
 });
 
-// 404 fallback
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
 const server = http.createServer(app);
 
-// Handle WebSocket upgrades (needed for proxying WS connections in target sites)
 server.on("upgrade", (req, socket, head) => {
   if (bare.shouldRoute(req)) {
     bare.routeUpgrade(req, socket, head);
@@ -53,8 +69,6 @@ server.on("upgrade", (req, socket, head) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`✅ Bare server running on http://localhost:${PORT}`);
-  console.log(`   Bare endpoint: http://localhost:${PORT}/bare/`);
 });
 
-// Vercel serverless export
 export default app;
